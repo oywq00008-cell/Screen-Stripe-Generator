@@ -22,3 +22,7 @@ Desktop.ini
 
 # 运行期诊断日志
 *.log
+
+# 仅供本地开发/排查使用，不入库
+/rust/preview_*.png
+/rust/tools/
