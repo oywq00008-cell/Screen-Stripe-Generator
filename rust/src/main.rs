@@ -11,6 +11,7 @@
 #![windows_subsystem = "windows"]
 
 mod app;
+mod disclaimer;
 mod layer;
 mod model;
 mod selector;
@@ -70,6 +71,7 @@ fn main() {
     }
 
     // --selftest <秒>：程序化注入一个区域、生成条纹、写诊断日志、若干秒后自动退出
+    // （防截图由主窗口的「防截图」勾选项控制，默认关闭 = 可被截图捕获）
     let selftest: Option<u64> = arg_val("--selftest").and_then(|v| v.parse().ok());
     // --orient h / --mode black|white / --flick
     let want_orient = arg_val("--orient").map(|v| {
@@ -88,8 +90,20 @@ fn main() {
 
     unsafe {
         let inst = win::GetModuleHandleW(std::ptr::null());
-        let exclude = !args.iter().any(|a| a == "--no-exclude");
-        let _layer = layer::create(inst, exclude);
+
+        // ---- 启动免责声明：置顶模态，不同意则立即退出，不创建任何其它窗口 ----
+        // 没有任何命令行开关可以跳过：必须由用户点击「同意」或按回车。
+        // （自动化测试通过模拟点击真实按钮来通过，而不是靠后门参数）
+        disclaimer::create(inst);
+        let agreed = disclaimer::ask();
+        disclaimer::destroy();
+        if !agreed {
+            log("用户不同意免责声明，程序立即退出");
+            return;
+        }
+        log("用户已同意免责声明");
+
+        let _layer = layer::create(inst);
         let _selector = selector::create(inst);
         let app_hwnd = app::create(inst);
         if app_hwnd == 0 {

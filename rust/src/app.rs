@@ -16,7 +16,7 @@ pub const APP_CLASS: &str = "ScreenStripeAppW";
 // ---------------------------------------------------------------- 布局常量
 
 const CW: i32 = 430; // 客户区宽
-const CH: i32 = 852; // 客户区高（含 8 行帮助文案）
+const CH: i32 = 876; // 客户区高（含 8 行帮助文案 + 余量）
 const X0: i32 = 18; // 内容左边距
 const W: i32 = 394; // 内容宽
 
@@ -49,8 +49,17 @@ const HIT_CLOSE: i32 = 5;
 const HIT_FLICK: i32 = 6;
 const HIT_ORIENT: i32 = 7;
 const HIT_BOSS: i32 = 8;
+const HIT_EXCL: i32 = 9;
 
 const HOTKEY_ID: i32 = 1;
+
+/// 层级维护定时器：Windows 的 shell（开始菜单 / 搜索 / 任务栏）会把自己的窗口
+/// 抬到第三方置顶窗口之上，所以要周期性检查并在被压住时重新抬升。
+const TIMER_ZORDER: usize = 7;
+const ZORDER_CHECK_MS: u32 = 40;
+/// 只有尺寸不小于此值的"压在我们之上的窗口"才值得重排 z 序。
+/// 否则 1×1 的 explorer 助手窗口、输入法状态条之类会持续触发重排（实测每秒 25 次）。
+const ZORDER_MIN_COVER: i32 = 120;
 
 fn r_sel() -> RECT {
     RECT::new(X0, 70, X0 + W, 112)
@@ -66,14 +75,17 @@ fn r_close() -> RECT {
 fn r_flick() -> RECT {
     RECT::new(X0, 234, X0 + W, 256)
 }
+fn r_excl() -> RECT {
+    RECT::new(X0, 262, X0 + W, 284)
+}
 fn r_orient() -> RECT {
-    RECT::new(X0, 262, X0 + W, 298)
+    RECT::new(X0, 290, X0 + W, 326)
 }
 fn r_boss() -> RECT {
-    RECT::new(X0, 306, X0 + W, 342)
+    RECT::new(X0, 334, X0 + W, 370)
 }
 fn r_preview() -> RECT {
-    RECT::new(X0, 412, X0 + W, 562)
+    RECT::new(X0, 440, X0 + W, 590)
 }
 
 // ---------------------------------------------------------------- 应用状态
@@ -84,6 +96,8 @@ struct App {
     orientation: Orientation,
     mode: ColorMode,
     flicker: bool,
+    /// 是否启用防截图（默认关闭 = 条纹可被截图捕获）
+    exclude_capture: bool,
     stripe_visible: bool,
     hover: i32,
     capturing: bool,
@@ -151,6 +165,28 @@ impl App {
         self.text(hdc, label, r, self.f_btn, C_WHITE, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
+    /// 勾选项：方框（选中打勾）+ 右侧文字
+    fn checkbox_row(&self, hdc: HDC, r: RECT, checked: bool, label: &str) {
+        let bx = RECT::new(r.left, r.top + 3, r.left + 15, r.top + 18);
+        if checked {
+            self.round_fill(hdc, bx, C_BLUE, 6);
+            unsafe {
+                let pen = CreatePen(0, 2, C_WHITE);
+                let op = SelectObject(hdc, pen);
+                MoveToEx(hdc, bx.left + 4, bx.top + 8, std::ptr::null_mut());
+                LineTo(hdc, bx.left + 6, bx.top + 11);
+                LineTo(hdc, bx.left + 11, bx.top + 4);
+                SelectObject(hdc, op);
+                DeleteObject(pen);
+            }
+        } else {
+            self.round_fill(hdc, bx, C_WHITE, 6);
+            self.frame(hdc, bx, self.border);
+        }
+        self.text(hdc, label, RECT::new(bx.right + 8, r.top, X0 + W, r.bottom),
+                  self.f_small, C_TITLE, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
+
     /// 白底 + 1px 边框 + 居中文字的「开关条」
     fn box_row(&self, hdc: HDC, r: RECT, label: &str, selected: bool, on: bool) {
         let bg = if selected {
@@ -185,6 +221,9 @@ impl App {
         }
         if r_flick().contains(x, y) {
             return HIT_FLICK;
+        }
+        if r_excl().contains(x, y) {
+            return HIT_EXCL;
         }
         if r_orient().contains(x, y) {
             return HIT_ORIENT;
@@ -226,28 +265,12 @@ impl App {
 
         // 随机闪烁勾选项
         let fr = r_flick();
-        let bx = RECT::new(fr.left, fr.top + 3, fr.left + 15, fr.top + 18);
-        self.fill(hdc, bx, self.white);
-        let on = self.flicker;
-        if on {
-            self.round_fill(hdc, bx, C_BLUE, 6);
-            // 打勾
-            unsafe {
-                let pen = CreatePen(0, 2, C_WHITE);
-                let op = SelectObject(hdc, pen);
-                MoveToEx(hdc, bx.left + 4, bx.top + 8, std::ptr::null_mut());
-                LineTo(hdc, bx.left + 6, bx.top + 11);
-                LineTo(hdc, bx.left + 11, bx.top + 4);
-                SelectObject(hdc, op);
-                DeleteObject(pen);
-            }
-        } else {
-            self.round_fill(hdc, bx, C_WHITE, 6);
-            self.frame(hdc, bx, self.border);
-        }
-        self.text(hdc, "随机闪烁（几条线条，间隔 1~5 秒，单次 0.1~3 秒）",
-                  RECT::new(bx.right + 8, fr.top, X0 + W, fr.bottom), self.f_small, C_TITLE,
-                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        self.checkbox_row(hdc, fr, self.flicker,
+                          "随机闪烁（几条线条，间隔 1~5 秒，单次 0.1~3 秒）");
+
+        // 防截图勾选项（默认关闭：条纹可被截图捕获）
+        self.checkbox_row(hdc, r_excl(), self.exclude_capture,
+                          "防截图（勾选后条纹不会被截图 / 录屏捕获）");
 
         // 条纹方向开关
         let orient_label = format!("条纹方向：{}（点击切换）", self.orientation.name());
@@ -266,10 +289,10 @@ impl App {
 
         // 状态
         self.text(hdc, &format!("已标记区域：{} 个（已记忆）", self.regions.len()),
-                  RECT::new(X0, 350, X0 + W, 368), self.f_body, C_TITLE,
+                  RECT::new(X0, 378, X0 + W, 396), self.f_body, C_TITLE,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         match &self.hint {
-            Some(h) => self.text(hdc, h, RECT::new(X0, 368, X0 + W, 386), self.f_body, C_WARN,
+            Some(h) => self.text(hdc, h, RECT::new(X0, 396, X0 + W, 414), self.f_body, C_WARN,
                                  DT_LEFT | DT_VCENTER | DT_SINGLELINE),
             None => {
                 let s = if self.stripe_visible {
@@ -278,19 +301,19 @@ impl App {
                 } else {
                     format!("条纹：已关闭　　闪烁：{}", if self.flicker { "开" } else { "关" })
                 };
-                self.text(hdc, &s, RECT::new(X0, 368, X0 + W, 386), self.f_body, C_TITLE,
+                self.text(hdc, &s, RECT::new(X0, 396, X0 + W, 414), self.f_body, C_TITLE,
                           DT_LEFT | DT_VCENTER | DT_SINGLELINE);
             }
         }
 
         // 预览
         self.text(hdc, "虚拟桌面预览（红框 = 条纹覆盖范围）",
-                  RECT::new(X0, 394, X0 + W, 410), self.f_small, C_MUTED,
+                  RECT::new(X0, 422, X0 + W, 438), self.f_small, C_MUTED,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         self.draw_preview(hdc, r_preview());
 
         // 区域明细
-        self.text(hdc, "区域明细", RECT::new(X0, 570, X0 + W, 586), self.f_small, C_MUTED,
+        self.text(hdc, "区域明细", RECT::new(X0, 598, X0 + W, 614), self.f_small, C_MUTED,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         let detail = if self.regions.is_empty() {
             "（暂无标记区域，请点「开始划定区域」）".to_string()
@@ -302,22 +325,22 @@ impl App {
                 .collect::<Vec<_>>()
                 .join("\n")
         };
-        self.text(hdc, &detail, RECT::new(X0, 588, X0 + W, 652), self.f_small, rgb(55, 65, 81),
+        self.text(hdc, &detail, RECT::new(X0, 616, X0 + W, 680), self.f_small, rgb(55, 65, 81),
                   DT_LEFT | DT_TOP | DT_WORDBREAK);
 
         // 说明
         let help = [
-            "· 先点「开始划定区域」拖动画圈（可圈多个）",
-            "   右键 / 回车 / Esc 结束圈选并返回",
-            "· 点「多色 / 纯黑 / 纯白」即按该颜色生成条纹",
-            "· 「关闭条纹」只关显示，标记会记住；重新圈选替换旧标记",
-            "· 「随机闪烁」：几条线隔 1~5 秒闪一次，单次消失 0.1~3 秒",
-            "· 「条纹方向」：竖条纹贯穿屏幕高度，横条纹贯穿屏幕宽度",
-            "· 「老板键」：设置后按组合键隐藏 / 恢复本窗口，条纹不受影响",
-            "· 任意界面按 Esc 可安全退出并清理所有覆盖层",
+            "· 划定区域：点「开始划定区域」拖动画圈，右键 / Esc 返回",
+            "· 生成条纹：点「多色 / 纯黑 / 纯白」即按该颜色生成",
+            "· 关闭条纹：只关显示，标记会记住；重新圈选会替换",
+            "· 随机闪烁：每个区域有几条线隔 1~5 秒闪一次",
+            "· 防截图：勾选后截图 / 录屏捕获不到条纹",
+            "· 条纹方向：竖条纹贯穿屏幕高、横条纹贯穿屏幕宽",
+            "· 老板键：按设定的组合键隐藏 / 恢复本窗口",
+            "· 任意界面按 Esc 退出并清理所有覆盖层",
         ].join("
 ");
-        self.text(hdc, &help, RECT::new(X0, 660, X0 + W, 840), self.f_help, C_MUTED,
+        self.text(hdc, &help, RECT::new(X0, 688, X0 + W, 864), self.f_help, C_MUTED,
                   DT_LEFT | DT_TOP | DT_WORDBREAK);
     }
 
@@ -377,10 +400,74 @@ impl App {
         unsafe { InvalidateRect(self.hwnd, std::ptr::null(), 0) };
     }
 
-    /// 让主窗口保持在覆盖层之上
+    /// 维持层级不变量：**主窗口 > 圈选遮罩 > 条纹覆盖层 > 其它窗口（含开始菜单等 shell UI）**。
+    ///
+    /// 做法：检查我方窗口栈最上层那个窗口的上方是否还有别的窗口；
+    /// 只有检测到"被外部窗口压住"时才自下而上重新抬升，避免无谓的层级抖动。
+    fn maintain_z_order(&self) {
+        let l = layer::hwnd();
+        if l == 0 || !layer::visible() {
+            return;
+        }
+        let sel = selector::hwnd();
+        let sel_vis = selector::visible();
+        let app_vis = unsafe { IsWindowVisible(self.hwnd) != 0 };
+
+        let top_own = if app_vis {
+            self.hwnd
+        } else if sel_vis {
+            sel
+        } else {
+            l
+        };
+        // 0 表示上方已无窗口 = 我们就在最顶层，无需处理
+        let above = unsafe { GetWindow(top_own, GW_HWNDPREV) };
+        if above == 0 {
+            return;
+        }
+        // 尺寸过小的辅助窗口不构成实际遮挡，不必为此反复重排 z 序
+        let mut r = RECT::default();
+        unsafe { GetWindowRect(above, &mut r) };
+        if r.w() < ZORDER_MIN_COVER || r.h() < ZORDER_MIN_COVER {
+            return;
+        }
+        // 记录被谁压住（节流：最多每秒一条）
+        {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static LAST_LOG: AtomicU64 = AtomicU64::new(0);
+            let now = crate::model::now_ms();
+            if now.saturating_sub(LAST_LOG.load(Ordering::Relaxed)) >= 1000 {
+                LAST_LOG.store(now, Ordering::Relaxed);
+                unsafe {
+                    let mut buf = [0u16; 128];
+                    let n = GetClassNameW(above, buf.as_mut_ptr(), buf.len() as i32);
+                    let name = String::from_utf16_lossy(&buf[..n.max(0) as usize]);
+                    crate::log_force(&format!(
+                        "[zorder] 被 {:?}({}) {}x{} 压住，重新抬升",
+                        name, above, r.w(), r.h()));
+                }
+            }
+        }
+        // 自下而上抬升，保证顺序：覆盖层 < 圈选遮罩 < 主窗口
+        layer::raise();
+        if sel_vis {
+            selector::raise();
+        }
+        if app_vis {
+            unsafe {
+                SetWindowPos(self.hwnd, HWND_TOP, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            }
+        }
+    }
+
+    /// 让主窗口保持在覆盖层之上。
+    /// 注意：对"已经是置顶"的窗口再用 HWND_TOPMOST 是空操作，不会重排同组内层级；
+    /// 必须用 HWND_TOP 才能真正抬到最顶层（否则条纹会画在主窗口上面）。
     fn raise_above_layer(&self) {
         unsafe {
-            SetWindowPos(self.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+            SetWindowPos(self.hwnd, HWND_TOP, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         }
     }
 
@@ -442,6 +529,13 @@ impl App {
             layer::rebuild(&self.regions, self.orientation, self.mode); // 立即重绘
             self.raise_above_layer();
         }
+        self.invalidate();
+    }
+
+    /// 切换防截图：勾选后覆盖层不被截图 / 录屏捕获
+    fn toggle_exclude(&mut self) {
+        self.exclude_capture = !self.exclude_capture;
+        layer::set_capture_excluded(self.exclude_capture);
         self.invalidate();
     }
 
@@ -600,6 +694,20 @@ unsafe extern "system" fn app_proc(hwnd: HWND, msg: UINT, wp: WPARAM, lp: LPARAM
             return 0;
         }
         WM_ERASEBKGND => return 1,
+        WM_TIMER => {
+            if wp == TIMER_ZORDER {
+                APP.with(|a| {
+                    if let Ok(g) = a.try_borrow() {
+                        if let Some(app) = g.as_ref() {
+                            if app.hwnd == hwnd {
+                                app.maintain_z_order();
+                            }
+                        }
+                    }
+                });
+                return 0;
+            }
+        }
         WM_MOUSEMOVE => {
             let (x, y) = cursor_from_lparam(lp);
             let mut need = false;
@@ -676,6 +784,7 @@ unsafe extern "system" fn app_proc(hwnd: HWND, msg: UINT, wp: WPARAM, lp: LPARAM
                         HIT_GEN2 => app.generate(ColorMode::White),
                         HIT_CLOSE => app.close_stripes(),
                         HIT_FLICK => app.toggle_flicker(),
+                        HIT_EXCL => app.toggle_exclude(),
                         HIT_ORIENT => app.toggle_orientation(),
                         HIT_BOSS => {
                             app.capturing = !app.capturing;
@@ -735,6 +844,7 @@ unsafe extern "system" fn app_proc(hwnd: HWND, msg: UINT, wp: WPARAM, lp: LPARAM
                 };
                 if let Some(app) = guard.as_mut() {
                     unsafe {
+                        KillTimer(app.hwnd, TIMER_ZORDER);
                         if app.boss_set {
                             UnregisterHotKey(app.hwnd, HOTKEY_ID);
                         }
@@ -778,14 +888,16 @@ pub fn create(inst: HINSTANCE) -> HWND {
     unsafe { AdjustWindowRectEx(&mut rect, style, 0, 0) };
 
     let title = wide("屏幕条纹生成器");
+    // 在主显示器工作区居中（而非硬编码坐标）
+    let (win_x, win_y) = work_area_center(rect.w(), rect.h());
     let hwnd = unsafe {
         CreateWindowExW(
-            0,
+            WS_EX_TOPMOST,
             class.as_ptr(),
             title.as_ptr(),
             style,
-            60,
-            40,
+            win_x,
+            win_y,
             rect.w(),
             rect.h(),
             0,
@@ -831,6 +943,7 @@ pub fn create(inst: HINSTANCE) -> HWND {
             orientation: Orientation::Vertical,
             mode: ColorMode::Multi,
             flicker: false,
+            exclude_capture: false,
             stripe_visible: false,
             hover: HIT_NONE,
             capturing: false,
@@ -854,6 +967,9 @@ pub fn create(inst: HINSTANCE) -> HWND {
         });
     });
 
+    // 启动层级维护定时器
+    unsafe { SetTimer(hwnd, TIMER_ZORDER, ZORDER_CHECK_MS, std::ptr::null()) };
+
     // 载入图标（若资源里没有则忽略）
     unsafe {
         let icon = LoadIconW(inst, 1 as *const u16);
@@ -868,7 +984,7 @@ pub fn create(inst: HINSTANCE) -> HWND {
 pub fn show(hwnd: HWND) {
     unsafe {
         ShowWindow(hwnd, SW_SHOW);
-        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+        SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
         SetForegroundWindow(hwnd);
         SetFocus(hwnd);
         UpdateWindow(hwnd);
@@ -954,6 +1070,8 @@ pub fn debug_set(orientation: Option<Orientation>, flicker: Option<bool>,
             }
             if app.stripe_visible && !app.regions.is_empty() {
                 layer::show(&app.regions, app.orientation, app.mode, app.flicker);
+                // layer::show 会把覆盖层重新抬到最上层，必须把主窗口再抬回来
+                app.raise_above_layer();
             }
             app.invalidate();
         }

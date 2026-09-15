@@ -224,7 +224,7 @@ unsafe extern "system" fn layer_proc(hwnd: HWND, msg: UINT, wp: WPARAM, lp: LPAR
 }
 
 /// 注册窗口类并创建覆盖层（初始隐藏）
-pub fn create(inst: HINSTANCE, exclude_from_capture: bool) -> HWND {
+pub fn create(inst: HINSTANCE) -> HWND {
     let class = wide(LAYER_CLASS);
     let wc = WNDCLASSW {
         style: 0,
@@ -261,20 +261,11 @@ pub fn create(inst: HINSTANCE, exclude_from_capture: bool) -> HWND {
     if hwnd == 0 {
         return 0;
     }
-    // 让覆盖层不被截图 / 录屏捕获：
-    //   WDA_EXCLUDEFROMCAPTURE —— Win10 2004+，捕获结果里完全没有该窗口
-    //   WDA_MONITOR           —— 旧系统兜底，捕获结果里显示为黑块
-    let mut capture_excluded = false;
+    // 默认不防截图（可被捕获）；由主窗口的勾选项调用 set_capture_excluded 切换
+    let capture_excluded = false;
     unsafe {
         SetLayeredWindowAttributes(hwnd, KEY_COLOR, 0, LWA_COLORKEY);
         SetTimer(hwnd, TIMER_ID, TICK_MS, std::ptr::null());
-        if exclude_from_capture {
-            if SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) != 0 {
-                capture_excluded = true;
-            } else if SetWindowDisplayAffinity(hwnd, WDA_MONITOR) != 0 {
-                capture_excluded = true;
-            }
-        }
     }
 
     LAYER.with(|l| {
@@ -397,6 +388,49 @@ pub fn total_line_count() -> usize {
             .map(|layer| layer.regions.iter().map(|v| v.len()).sum())
             .unwrap_or(0)
     })
+}
+
+/// 切换覆盖层的"不被截图捕获"状态
+pub fn set_capture_excluded(on: bool) {
+    LAYER.with(|l| {
+        if let Some(layer) = l.borrow_mut().as_mut() {
+            if layer.hwnd == 0 || layer.capture_excluded == on {
+                return;
+            }
+            unsafe {
+                // WDA_EXCLUDEFROMCAPTURE：Win10 2004+ 完全不出现在捕获结果里
+                // WDA_MONITOR：旧系统兜底，捕获结果里显示为黑块
+                let ok = if on {
+                    SetWindowDisplayAffinity(layer.hwnd, WDA_EXCLUDEFROMCAPTURE) != 0
+                        || SetWindowDisplayAffinity(layer.hwnd, WDA_MONITOR) != 0
+                } else {
+                    SetWindowDisplayAffinity(layer.hwnd, WDA_NONE) != 0
+                };
+                if ok {
+                    layer.capture_excluded = on;
+                }
+            }
+        }
+    });
+}
+
+/// 覆盖层窗口句柄（0 = 未创建）
+pub fn hwnd() -> HWND {
+    LAYER.with(|l| l.borrow().as_ref().map(|x| x.hwnd).unwrap_or(0))
+}
+
+/// 把覆盖层抬到 z 序最顶层（用于压过 shell 的开始菜单等窗口）
+pub fn raise() {
+    LAYER.with(|l| {
+        if let Some(layer) = l.borrow().as_ref() {
+            if layer.hwnd != 0 {
+                unsafe {
+                    SetWindowPos(layer.hwnd, HWND_TOP, 0, 0, 0, 0,
+                                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                }
+            }
+        }
+    });
 }
 
 /// 覆盖层是否已启用"不被截图捕获"

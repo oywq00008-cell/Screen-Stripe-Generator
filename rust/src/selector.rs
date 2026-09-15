@@ -377,6 +377,35 @@ pub fn run_modal() {
     }
 }
 
+/// 圈选窗口句柄
+pub fn hwnd() -> HWND {
+    SEL.with(|s| s.borrow().as_ref().map(|x| x.hwnd).unwrap_or(0))
+}
+
+/// 圈选遮罩是否正在显示
+pub fn visible() -> bool {
+    SEL.with(|s| {
+        s.borrow()
+            .as_ref()
+            .map(|sel| sel.hwnd != 0 && unsafe { IsWindowVisible(sel.hwnd) } != 0)
+            .unwrap_or(false)
+    })
+}
+
+/// 把圈选遮罩抬到最顶层（须在覆盖层之上、主窗口之下）
+pub fn raise() {
+    SEL.with(|s| {
+        if let Some(sel) = s.borrow().as_ref() {
+            if sel.hwnd != 0 {
+                unsafe {
+                    SetWindowPos(sel.hwnd, HWND_TOP, 0, 0, 0, 0,
+                                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                }
+            }
+        }
+    });
+}
+
 /// 取走本次圈选结果（无新圈则返回空）
 pub fn take_result() -> Vec<Region> {
     SEL.with(|s| {

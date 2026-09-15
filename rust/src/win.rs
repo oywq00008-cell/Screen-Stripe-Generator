@@ -180,6 +180,10 @@ unsafe extern "system" {
     pub fn DrawTextW(hdc: HDC, text: *const u16, count: i32, rect: *mut RECT, format: UINT) -> i32;
     pub fn FrameRect(hdc: HDC, rect: *const RECT, brush: HBRUSH) -> BOOL;
     pub fn FindWindowW(class_name: *const u16, window_name: *const u16) -> HWND;
+    /// 取 z 序相邻窗口（GW_HWNDPREV = 上方、GW_HWNDNEXT = 下方）
+    pub fn GetWindow(hwnd: HWND, cmd: UINT) -> HWND;
+    /// 取窗口类名（返回写入的字符数）
+    pub fn GetClassNameW(hwnd: HWND, buf: *mut u16, max: i32) -> i32;
     pub fn IsWindow(hwnd: HWND) -> BOOL;
     pub fn SetWindowTextW(hwnd: HWND, text: *const u16) -> BOOL;
     pub fn SendMessageW(hwnd: HWND, msg: UINT, wp: WPARAM, lp: LPARAM) -> LRESULT;
@@ -189,6 +193,13 @@ unsafe extern "system" {
     pub fn PostMessageW(hwnd: HWND, msg: UINT, wp: WPARAM, lp: LPARAM) -> BOOL;
     /// 设置窗口的显示亲和性：可让窗口不被截图 / 录屏捕获
     pub fn SetWindowDisplayAffinity(hwnd: HWND, affinity: DWORD) -> BOOL;
+    /// 查询系统参数（用于取主显示器工作区）
+    pub fn SystemParametersInfoW(
+        action: UINT,
+        param: UINT,
+        data: *mut c_void,
+        win_ini: UINT,
+    ) -> BOOL;
 }
 
 #[link(name = "gdi32")]
@@ -264,6 +275,9 @@ pub const LWA_ALPHA: DWORD = 0x0000_0002;
 
 pub const SW_SHOW: i32 = 5;
 pub const SW_HIDE: i32 = 0;
+pub const GW_HWNDNEXT: UINT = 2;
+pub const GW_HWNDPREV: UINT = 3;
+pub const HWND_TOP: HWND = 0; // 置于 z 序最顶层（同组内也可精确重排）
 pub const HWND_TOPMOST: HWND = -1;
 pub const SWP_NOMOVE: UINT = 0x0002;
 pub const SWP_NOSIZE: UINT = 0x0001;
@@ -345,6 +359,29 @@ pub const CLEARTYPE_QUALITY: DWORD = 5;
 pub const SRCCOPY: DWORD = 0x00CC_0020;
 
 pub const DPI_PER_MONITOR_AWARE_V2: isize = -4;
+
+/// SPI_GETWORKAREA：取主显示器工作区（屏幕减去任务栏）
+pub const SPI_GETWORKAREA: UINT = 0x0030;
+
+/// 把尺寸为 w×h 的窗口摆到主显示器工作区正中；返回 (x, y)。
+/// 取工作区而非整屏，避免任务栏较高时窗口被压住；窗口比工作区还大时钳到上边界。
+pub fn work_area_center(w: i32, h: i32) -> (i32, i32) {
+    unsafe {
+        let mut wa = RECT::default();
+        if SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut wa as *mut RECT as *mut c_void, 0) != 0
+            && wa.w() > 0
+            && wa.h() > 0
+        {
+            let x = wa.left + ((wa.w() - w) / 2).max(0);
+            let y = wa.top + ((wa.h() - h) / 2).max(0);
+            return (x, y);
+        }
+        // 兜底：整屏居中
+        let sw = GetSystemMetrics(0);
+        let sh = GetSystemMetrics(1);
+        (((sw - w) / 2).max(0), ((sh - h) / 2).max(0))
+    }
+}
 
 // 窗口显示亲和性（SetWindowDisplayAffinity）
 pub const WDA_NONE: DWORD = 0x0000_0000;
