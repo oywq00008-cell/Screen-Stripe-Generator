@@ -1,0 +1,14 @@
+[package]
+name = "screen_stripe"
+version = "0.1.0"
+edition = "2024"
+
+# 零依赖：所有 Win32 调用以手写 extern 声明实现，不引入任何 crate
+[dependencies]
+
+[profile.release]
+opt-level = "z"      # 优先体积
+lto = "fat"          # 全程序优化，砍掉未用代码
+codegen-units = 1    # 让 LTO 更彻底
+panic = "abort"      # 去掉栈展开机制（省得最多）
+strip = true         # 去掉符号表
