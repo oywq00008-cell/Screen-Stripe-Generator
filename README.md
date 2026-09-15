@@ -14,11 +14,17 @@
 整个程序用 **Rust + Win32 手写实现，零第三方依赖**（连随机数都是自己写的），
 编译出来是**一个约 350 KB 的单文件 exe，不需要任何运行库**。
 
-<!-- 预览：图片放进 docs/ 后取消注释
-| 主界面 | 竖向条纹 |
+## 预览
+
+**主界面** —— 圈选、三色生成、方向切换、随机闪烁、老板键、防截图都在这一块面板上。
+
+![主界面](docs/main-window.png)
+
+**圈选与条纹效果** —— 拖动画圈标记范围，绿色引导线提示条纹会覆盖到哪里；缝隙处是**真透明**，桌面内容照常可见。
+
+| 圈选区域 | 条纹效果 |
 | --- | --- |
-| ![主界面](docs/main-window.png) | ![竖向条纹](docs/vertical-stripes.png) |
--->
+| ![圈选区域](docs/selection.png) | ![条纹效果](docs/stripes.png) |
 
 ## 下载
 
@@ -107,4 +113,4 @@ cargo build --release --target x86_64-pc-windows-msvc
 
 ## 许可
 
-本项目采用 **MIT License**。
+本项目采用 **[MIT License](LICENSE)**。Copyright (c) 2026 oywq00008-cell。

@@ -17,11 +17,17 @@ It is written from scratch in **Rust + Win32 with zero third-party dependencies*
 (the random number generator is hand-written too), and builds into
 **a single ~350 KB executable that needs no runtime at all**.
 
-<!-- Preview: uncomment after putting images into docs/
-| Main window | Vertical stripes |
+## Preview
+
+**Main window** — region selection, three color modes, orientation switching, random flicker, the boss key and anti-capture all live on this one panel.
+
+![Main window](docs/main-window.png)
+
+**Selecting a region, and the stripes** — draw a loop to mark the area; the green guides show how far the stripes will span. The gaps are **truly transparent**, so the desktop shows through.
+
+| Selecting a region | The stripes |
 | --- | --- |
-| ![Main window](docs/main-window.png) | ![Vertical stripes](docs/vertical-stripes.png) |
--->
+| ![Selecting a region](docs/selection.png) | ![The stripes](docs/stripes.png) |
 
 ## Download
 
@@ -125,4 +131,4 @@ into `rust/dist/`.
 
 ## License
 
-Released under the **MIT License**.
+Released under the **[MIT License](LICENSE)**. Copyright (c) 2026 oywq00008-cell.
